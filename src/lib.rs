@@ -34,7 +34,7 @@ impl Session {
                     match message {
                         Message::Binary(data) => {
                             let envelope =
-                                Envelope::from_buffer(&mut data.as_slice(), Compression::None)
+                                Envelope::from_buffer(data.as_slice(), Compression::None)
                                     .unwrap()
                                     .envelope;
                             in_tx.send(envelope).unwrap();
