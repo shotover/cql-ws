@@ -10,6 +10,8 @@ use cassandra_protocol::query::query_params::QueryParams;
 use cassandra_protocol::types::cassandra_type::{wrapper_fn, CassandraType};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc::unbounded_channel;
+use tokio_tungstenite::tungstenite::error::Error;
+use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::Message;
 
 pub struct Session {
@@ -29,17 +31,27 @@ impl Session {
         // read task
         tokio::spawn(async move {
             loop {
-                while let Some(message) = read.next().await {
-                    let message = message.unwrap();
-                    match message {
-                        Message::Binary(data) => {
-                            let envelope =
-                                Envelope::from_buffer(data.as_slice(), Compression::None)
-                                    .unwrap()
-                                    .envelope;
-                            in_tx.send(envelope).unwrap();
+                tokio::select! {
+                    result = read.next() => {
+                        if let Some(message) = result {
+                            match message {
+                                Ok(Message::Binary(data)) => {
+                                    let envelope =
+                                        Envelope::from_buffer(data.as_slice(), Compression::None)
+                                            .unwrap()
+                                            .envelope;
+                                    in_tx.send(envelope).unwrap();
+                                }
+                                Ok(Message::Close(_)) => {
+                                    return;
+                                }
+                                Ok(_) => panic!("expected to recieve a binary message"),
+                                Err(err) => panic!("{err}")
+                            }
                         }
-                        _ => panic!("expected to receive a binary message"),
+                    }
+                    _ = in_tx.closed() => {
+                        return;
                     }
                 }
             }
@@ -48,9 +60,16 @@ impl Session {
         // write task
         tokio::spawn(async move {
             loop {
-                while let Some(envelope) = out_rx.recv().await {
+                if let Some(envelope) = out_rx.recv().await {
                     let data = envelope.encode_with(Compression::None).unwrap();
                     write.send(Message::Binary(data)).await.unwrap();
+                } else {
+                    match write.send(Message::Close(None)).await {
+                        Ok(_) => {}
+                        Err(Error::Protocol(ProtocolError::SendAfterClosing)) => {}
+                        Err(err) => panic!("{err}"),
+                    }
+                    break;
                 }
             }
         });
@@ -114,4 +133,48 @@ impl Session {
 
         panic!("expected to receive a result message")
     }
+
+    // pub async fn query(&mut self, query: &str) -> Vec<Vec<CassandraType>> {
+    //     let envelope = Envelope::new_query(
+    //         BodyReqQuery {
+    //             query: query.into(),
+    //             query_params: QueryParams::default(),
+    //         },
+    //         Flags::empty(),
+    //         Version::V4,
+    //     );
+    //
+    //     self.out_tx.send(envelope).unwrap();
+    //
+    //     match tokio::time::timeout(tokio::time::Duration::from_millis(5000), self.in_rx.recv()).await
+    //     {
+    //         Ok(Some(envelope)) => {
+    //             if let ResponseBody::Result(ResResultBody::Rows(BodyResResultRows {
+    //                 rows_content,
+    //                 metadata,
+    //                 ..
+    //             })) = envelope.response_body().unwrap()
+    //             {
+    //                 let mut result_values = vec![];
+    //                 for row in &rows_content {
+    //                     let mut row_result_values = vec![];
+    //                     for (i, col_spec) in metadata.col_specs.iter().enumerate() {
+    //                         let wrapper = wrapper_fn(&col_spec.col_type.id);
+    //                         let value =
+    //                             wrapper(&row[i], &col_spec.col_type, envelope.version).unwrap();
+    //
+    //                         row_result_values.push(value);
+    //                     }
+    //                     result_values.push(row_result_values);
+    //                 }
+    //
+    //                 return result_values;
+    //             }
+    //         }
+    //         Ok(None) => panic!("no envelope"),
+    //         Err(_) => panic!("Timeout!"),
+    //     }
+    //
+    //     panic!("expected to receive a result message")
+    // }
 }
