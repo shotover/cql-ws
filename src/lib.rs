@@ -15,8 +15,8 @@ use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::Message;
 
 pub struct Session {
-    in_rx: tokio::sync::mpsc::UnboundedReceiver<Envelope>,
-    out_tx: tokio::sync::mpsc::UnboundedSender<Envelope>,
+    in_rx: tokio::sync::mpsc::UnboundedReceiver<Message>,
+    out_tx: tokio::sync::mpsc::UnboundedSender<Message>,
 }
 
 impl Session {
@@ -25,8 +25,8 @@ impl Session {
 
         let (mut write, mut read) = ws_stream.split();
 
-        let (in_tx, in_rx) = unbounded_channel::<Envelope>();
-        let (out_tx, mut out_rx) = unbounded_channel::<Envelope>();
+        let (in_tx, in_rx) = unbounded_channel::<Message>();
+        let (out_tx, mut out_rx) = unbounded_channel::<Message>();
 
         // read task
         tokio::spawn(async move {
@@ -35,12 +35,8 @@ impl Session {
                     result = read.next() => {
                         if let Some(message) = result {
                             match message {
-                                Ok(Message::Binary(data)) => {
-                                    let envelope =
-                                        Envelope::from_buffer(data.as_slice(), Compression::None)
-                                            .unwrap()
-                                            .envelope;
-                                    in_tx.send(envelope).unwrap();
+                                Ok(ws_message @ Message::Binary(_)) => {
+                                    in_tx.send(ws_message).unwrap();
                                 }
                                 Ok(Message::Close(_)) => {
                                     return;
@@ -60,9 +56,8 @@ impl Session {
         // write task
         tokio::spawn(async move {
             loop {
-                if let Some(envelope) = out_rx.recv().await {
-                    let data = envelope.encode_with(Compression::None).unwrap();
-                    write.send(Message::Binary(data)).await.unwrap();
+                if let Some(ws_message) = out_rx.recv().await {
+                    write.send(ws_message).await.unwrap();
                 } else {
                     match write.send(Message::Close(None)).await {
                         Ok(_) => {}
@@ -81,18 +76,16 @@ impl Session {
 
     async fn startup(&mut self) {
         let envelope = Envelope::new_req_startup(None, Version::V4);
-        self.out_tx.send(envelope).unwrap();
+        self.out_tx.send(Self::encode(envelope)).unwrap();
 
-        if let Some(envelope) = self.in_rx.recv().await {
-            match envelope.opcode {
-                Opcode::Ready => println!("cql-ws: received: {:?}", envelope),
-                Opcode::Authenticate => {
-                    todo!();
-                }
-                _ => panic!("expected to receive a ready or authenticate message"),
+        let envelope = Self::decode(self.in_rx.recv().await.unwrap());
+
+        match envelope.opcode {
+            Opcode::Ready => println!("cql-ws: received: {:?}", envelope),
+            Opcode::Authenticate => {
+                todo!();
             }
-        } else {
-            panic!("expected to receive a ready or authenticate message")
+            _ => panic!("expected to receive a ready or authenticate message"),
         }
     }
 
@@ -106,32 +99,56 @@ impl Session {
             Version::V4,
         );
 
-        self.out_tx.send(envelope).unwrap();
+        self.out_tx.send(Self::encode(envelope)).unwrap();
 
-        if let Some(envelope) = self.in_rx.recv().await {
-            if let ResponseBody::Result(ResResultBody::Rows(BodyResResultRows {
-                rows_content,
-                metadata,
-                ..
-            })) = envelope.response_body().unwrap()
-            {
-                let mut result_values = vec![];
-                for row in &rows_content {
-                    let mut row_result_values = vec![];
-                    for (i, col_spec) in metadata.col_specs.iter().enumerate() {
-                        let wrapper = wrapper_fn(&col_spec.col_type.id);
-                        let value = wrapper(&row[i], &col_spec.col_type, envelope.version).unwrap();
+        let envelope = Self::decode(self.in_rx.recv().await.unwrap());
 
-                        row_result_values.push(value);
-                    }
-                    result_values.push(row_result_values);
+        if let ResponseBody::Result(ResResultBody::Rows(BodyResResultRows {
+            rows_content,
+            metadata,
+            ..
+        })) = envelope.response_body().unwrap()
+        {
+            let mut result_values = vec![];
+            for row in &rows_content {
+                let mut row_result_values = vec![];
+                for (i, col_spec) in metadata.col_specs.iter().enumerate() {
+                    let wrapper = wrapper_fn(&col_spec.col_type.id);
+                    let value = wrapper(&row[i], &col_spec.col_type, envelope.version).unwrap();
+
+                    row_result_values.push(value);
                 }
-
-                return result_values;
+                result_values.push(row_result_values);
             }
-        }
 
-        panic!("expected to receive a result message")
+            result_values
+        } else {
+            panic!("unexpected to recieve a result envelope");
+        }
+    }
+
+    fn encode(envelope: Envelope) -> Message {
+        let data = envelope.encode_with(Compression::None).unwrap();
+        Message::Binary(data)
+    }
+
+    fn decode(ws_message: Message) -> Envelope {
+        match ws_message {
+            Message::Binary(data) => {
+                Envelope::from_buffer(data.as_slice(), Compression::None)
+                    .unwrap()
+                    .envelope
+            }
+            _ => panic!("expected to receive a binary message"),
+        }
+    }
+
+    pub async fn send_raw_ws_message(&mut self, ws_message: Message) {
+        self.out_tx.send(ws_message).unwrap();
+    }
+
+    pub async fn wait_for_raw_ws_message_resp(&mut self) -> Message {
+        self.in_rx.recv().await.unwrap()
     }
 
     // pub async fn query(&mut self, query: &str) -> Vec<Vec<CassandraType>> {
