@@ -11,5 +11,5 @@ cassandra-protocol = "3.0"
 futures-util = "0.3.28"
 http = "0.2.9"
 tokio = { version = "1.28.0", features = ["full"] }
-tokio-tungstenite = { path = "/home/conor/src/tokio-tungstenite" }
+tokio-tungstenite = { git = "https://github.com/conorbros/tokio-tungstenite" }
 
