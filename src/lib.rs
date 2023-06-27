@@ -12,6 +12,8 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_tungstenite::tungstenite::error::Error;
 use tokio_tungstenite::tungstenite::error::ProtocolError;
+use tokio_tungstenite::tungstenite::handshake::client::generate_key;
+use tokio_tungstenite::tungstenite::handshake::server::Request;
 use tokio_tungstenite::tungstenite::Message;
 
 pub struct Session {
@@ -20,8 +22,39 @@ pub struct Session {
 }
 
 impl Session {
+    fn construct_request(uri: &str) -> Request {
+        let uri = uri.parse::<http::Uri>().unwrap();
+
+        let authority = uri.authority().unwrap().as_str();
+        let host = authority
+            .find('@')
+            .map(|idx| authority.split_at(idx + 1).1)
+            .unwrap_or_else(|| authority);
+
+        if host.is_empty() {
+            panic!("Empty host name");
+        }
+
+        http::Request::builder()
+            .method("GET")
+            .header("Host", host)
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", generate_key())
+            .header(
+                "Sec-WebSocket-Protocol",
+                "cql".parse::<http::HeaderValue>().unwrap(),
+            )
+            .uri(uri)
+            .body(())
+            .unwrap()
+    }
+
     pub async fn new(address: &str) -> Self {
-        let (ws_stream, _) = tokio_tungstenite::connect_async(address).await.unwrap();
+        let (ws_stream, _) = tokio_tungstenite::connect_async(Self::construct_request(address))
+            .await
+            .unwrap();
 
         let (mut write, mut read) = ws_stream.split();
 

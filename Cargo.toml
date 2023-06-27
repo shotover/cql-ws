@@ -9,6 +9,7 @@ license = "Apache-2.0"
 [dependencies]
 cassandra-protocol = "3.0"
 futures-util = "0.3.28"
+http = "0.2.9"
 tokio = { version = "1.28.0", features = ["full"] }
-tokio-tungstenite = "0.18.0"
+tokio-tungstenite = { path = "/home/conor/src/tokio-tungstenite" }
 
