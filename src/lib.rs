@@ -30,7 +30,7 @@ pub struct Session {
 }
 
 impl Session {
-    fn construct_request(uri: &str, use_subprotocol_header: bool) -> Request {
+    fn construct_request(uri: &str) -> Request {
         let uri = uri.parse::<http::Uri>().unwrap();
 
         let authority = uri.authority().unwrap().as_str();
@@ -43,27 +43,23 @@ impl Session {
             panic!("Empty host name");
         }
 
-        let mut builder = http::Request::builder()
+        http::Request::builder()
             .method("GET")
             .header("Host", host)
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
-            .header("Sec-WebSocket-Key", generate_key());
-
-        if use_subprotocol_header {
-            builder = builder.header(
+            .header("Sec-WebSocket-Key", generate_key())
+            .header(
                 "Sec-WebSocket-Protocol",
                 "cql".parse::<http::HeaderValue>().unwrap(),
-            );
-        }
-        builder.uri(uri).body(()).unwrap()
+            )
+        .uri(uri).body(()).unwrap()
     }
 
-    pub async fn new(address: &str, use_subprotocol_header: bool) -> Self {
+    pub async fn new(address: &str) -> Self {
         let (ws_stream, _) = tokio_tungstenite::connect_async(Self::construct_request(
             address,
-            use_subprotocol_header,
         ))
         .await
         .unwrap();
@@ -78,7 +74,7 @@ impl Session {
         session
     }
 
-    pub async fn new_tls(address: &str, ca_path: &str, use_subprotocol_header: bool) -> Self {
+    pub async fn new_tls(address: &str, ca_path: &str) -> Self {
         let root_cert_store = load_ca(ca_path);
 
         let tls_client_config = rustls::ClientConfig::builder()
@@ -87,7 +83,7 @@ impl Session {
             .with_no_client_auth();
 
         let (ws_stream, _) = tokio_tungstenite::connect_async_tls_with_config(
-            Self::construct_request(address, use_subprotocol_header),
+            Self::construct_request(address),
             None,
             false,
             Some(Connector::Rustls(Arc::new(tls_client_config))),
