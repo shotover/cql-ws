@@ -54,15 +54,15 @@ impl Session {
                 "Sec-WebSocket-Protocol",
                 "cql".parse::<http::HeaderValue>().unwrap(),
             )
-            .uri(uri)
-            .body(())
-            .unwrap()
+        .uri(uri).body(()).unwrap()
     }
 
     pub async fn new(address: &str) -> Self {
-        let (ws_stream, _) = tokio_tungstenite::connect_async(Self::construct_request(address))
-            .await
-            .unwrap();
+        let (ws_stream, _) = tokio_tungstenite::connect_async(Self::construct_request(
+            address,
+        ))
+        .await
+        .unwrap();
 
         let (in_tx, in_rx) = unbounded_channel::<Message>();
         let (out_tx, out_rx) = unbounded_channel::<Message>();
